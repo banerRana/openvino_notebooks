@@ -1,17 +1,17 @@
 """
- Copyright (C) 2020 Intel Corporation
+Copyright (C) 2020 Intel Corporation
 
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-      http://www.apache.org/licenses/LICENSE-2.0
+     http://www.apache.org/licenses/LICENSE-2.0
 
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 """
 
 import copy
@@ -20,26 +20,26 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Dict, Set, List, Optional, Callable
+from typing import Optional, Callable
 
 import cv2
 
 import openvino.properties as props
 from custom_segmentation import Model
 
-
 # Fetch `notebook_utils` module
 import requests
 
 r = requests.get(
     url="https://raw.githubusercontent.com/openvinotoolkit/openvino_notebooks/latest/utils/notebook_utils.py",
+    timeout=30,
 )
 open("notebook_utils.py", "w").write(r.text)
 
 from notebook_utils import show_array
 
 
-def show_live_inference(ie, image_paths: List, model: Model, device: str, reader: Optional[Callable] = None):
+def show_live_inference(ie, image_paths: list, model: Model, device: str, reader: Optional[Callable] = None):
     """
     Do inference of images listed in `image_paths` on `model` on the given `device` and show
     the results in real time in a Jupyter Notebook
@@ -121,7 +121,7 @@ def parse_devices(device_string):
     return (device_string,)
 
 
-def parse_value_per_device(devices: Set[str], values_string: str) -> Dict[str, int]:
+def parse_value_per_device(devices: set[str], values_string: str) -> dict[str, int]:
     """Format: <device1>:<value1>,<device2>:<value2> or just <value>"""
     values_string_upper = values_string.upper()
     result = {}
@@ -139,7 +139,7 @@ def parse_value_per_device(devices: Set[str], values_string: str) -> Dict[str, i
     return result
 
 
-def get_user_config(flags_d: str, flags_nstreams: str, flags_nthreads: int) -> Dict[str, str]:
+def get_user_config(flags_d: str, flags_nstreams: str, flags_nthreads: int) -> dict[str, str]:
     config = {}
 
     devices = set(parse_devices(flags_d))

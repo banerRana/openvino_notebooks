@@ -5,7 +5,11 @@ import sys
 import cv2
 import numpy as np
 from os import PathLike
-from openvino.runtime import PartialShape
+
+try:
+    from openvino import PartialShape
+except ImportError:
+    from openvino.runtime import PartialShape
 import logging
 
 # Fetch `notebook_utils` module
@@ -13,6 +17,7 @@ import requests
 
 r = requests.get(
     url="https://raw.githubusercontent.com/openvinotoolkit/openvino_notebooks/latest/utils/notebook_utils.py",
+    timeout=30,
 )
 open("notebook_utils.py", "w").write(r.text)
 from notebook_utils import segmentation_map_to_overlay

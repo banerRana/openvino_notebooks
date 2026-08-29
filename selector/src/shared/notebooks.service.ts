@@ -1,5 +1,5 @@
-import { NOTEBOOKS_METADATA_FILE_NAME, NOTEBOOKS_STATUS_FILE_NAME } from './constants';
-import { INotebookMetadata } from './notebook-metadata';
+import { ARCHIVED_NOTEBOOKS_FILE_NAME, NOTEBOOKS_METADATA_FILE_NAME, NOTEBOOKS_STATUS_FILE_NAME } from './constants';
+import { IArchivedNotebookMetadata, INotebookMetadata } from './notebook-metadata';
 import { INotebookStatus } from './notebook-status';
 
 export const SORT_OPTIONS = {
@@ -19,6 +19,13 @@ interface INotebooksFilters {
   limit: number;
 }
 
+interface IArchivedNotebooksFilters {
+  searchValue: string;
+  sort: SortValues;
+  offset: number;
+  limit: number;
+}
+
 type NotebooksMap = Record<string, INotebookMetadata & { status?: INotebookStatus['status'] }>;
 
 export type NotebookItem = NotebooksMap[string];
@@ -26,6 +33,7 @@ export type NotebookItem = NotebooksMap[string];
 class NotebooksService {
   private _notebooksMap: NotebooksMap | null = null;
   private _allNotebooksTags: string[] = [];
+  private _archivedNotebooks: IArchivedNotebookMetadata[] | null = null;
 
   private async _getNotebooksMap(): Promise<NotebooksMap> {
     if (!this._notebooksMap) {
@@ -45,6 +53,19 @@ class NotebooksService {
     return this._notebooksMap;
   }
 
+  private async _getArchivedNotebooks(): Promise<IArchivedNotebookMetadata[]> {
+    if (!this._archivedNotebooks) {
+      const { BASE_URL } = import.meta.env;
+      try {
+        const response = await fetch(`${BASE_URL}${ARCHIVED_NOTEBOOKS_FILE_NAME}`);
+        this._archivedNotebooks = response.ok ? ((await response.json()) as IArchivedNotebookMetadata[]) : [];
+      } catch {
+        this._archivedNotebooks = [];
+      }
+    }
+    return this._archivedNotebooks;
+  }
+
   async getNotebooks({
     tags,
     searchValue,
@@ -60,7 +81,14 @@ class NotebooksService {
 
         return flatSelectedTags.every((tag) => flatNotebookTags.includes(tag));
       })
-      .filter(({ title }) => title.toLowerCase().includes(searchValue.toLowerCase()));
+      .filter(({ title, path, models }) => {
+        const search = searchValue.toLowerCase();
+        return (
+          title.toLowerCase().includes(search) ||
+          path.toLowerCase().includes(search) ||
+          models.some((model) => model.toLowerCase().includes(search))
+        );
+      });
     const sortedPaginatedNotebooks = filteredNotebooks.sort(this._getCompareFn(sort)).slice(offset, offset + limit);
     return [sortedPaginatedNotebooks, filteredNotebooks.length, notebooks.length];
   }
@@ -81,6 +109,45 @@ class NotebooksService {
 
   get allNotebooksTags(): typeof this._allNotebooksTags {
     return this._allNotebooksTags;
+  }
+
+  async getArchivedNotebooks({
+    searchValue,
+    sort,
+    offset,
+    limit,
+  }: IArchivedNotebooksFilters): Promise<[IArchivedNotebookMetadata[], number, number]> {
+    const archived = await this._getArchivedNotebooks();
+    const normalizedSearch = searchValue.trim().toLowerCase();
+    const filtered =
+      normalizedSearch === ''
+        ? archived
+        : archived.filter(
+            ({ title, models }) =>
+              title.toLowerCase().includes(normalizedSearch) ||
+              (models ?? []).some((model) => model.toLowerCase().includes(normalizedSearch))
+          );
+    if (limit === 0) {
+      return [[], filtered.length, archived.length];
+    }
+    const sorted = filtered.sort(this._getArchivedCompareFn(sort)).slice(offset, offset + limit);
+    return [sorted, filtered.length, archived.length];
+  }
+
+  private _getArchivedCompareFn(
+    sort: SortValues
+  ): Parameters<Array<IArchivedNotebookMetadata>['sort']>[0] {
+    if (sort === SORT_OPTIONS.RECENTLY_ADDED || sort === SORT_OPTIONS.RECENTLY_UPDATED) {
+      // Sort by lastBranch descending (newest release first)
+      return (a, b) => b.lastBranch.localeCompare(a.lastBranch, undefined, { numeric: true });
+    }
+    if (sort === SORT_OPTIONS.NAME_ASCENDING) {
+      return (a, b) => a.title.toUpperCase().localeCompare(b.title.toUpperCase());
+    }
+    if (sort === SORT_OPTIONS.NAME_DESCENDING) {
+      return (a, b) => b.title.toUpperCase().localeCompare(a.title.toUpperCase());
+    }
+    return () => 0;
   }
 
   private _getCompareFn(sort: SortValues): Parameters<Array<INotebookMetadata>['sort']>[0] {
@@ -104,7 +171,7 @@ class NotebooksService {
     metadataMap: Record<string, INotebookMetadata>,
     statusMap: Record<string, INotebookStatus>
   ): NotebooksMap {
-    const result = { ...metadataMap } as NotebooksMap;
+    const result: NotebooksMap = { ...metadataMap };
     for (const [notebookPath, { status }] of Object.entries(statusMap)) {
       if (!result[notebookPath]) {
         console.warn(`Unknown notebook "${notebookPath}" found in status report.`);

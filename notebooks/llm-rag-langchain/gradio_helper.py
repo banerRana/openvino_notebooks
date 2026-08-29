@@ -1,6 +1,5 @@
-from typing import Callable, Literal
+from typing import Callable
 import gradio as gr
-
 
 chinese_examples = [
     ["英特尔®酷睿™ Ultra处理器可以降低多少功耗？"],
@@ -39,7 +38,8 @@ def make_demo(
     stop_fn: Callable,
     update_retriever_fn: Callable,
     model_name: str,
-    language: Literal["English", "Chinese"] = "English",
+    language: str = "English",
+    rerank_device: str | None = None,
 ):
     examples = chinese_examples if (language == "Chinese") else english_examples
 
@@ -203,7 +203,7 @@ def make_demo(
                         with gr.Row():
                             search_method = gr.Dropdown(
                                 ["similarity_score_threshold", "similarity", "mmr"],
-                                value="similarity_score_threshold",
+                                value="similarity",
                                 label="Searching Method",
                                 info="Method used to search vector store",
                                 multiselect=False,
@@ -226,14 +226,14 @@ def make_demo(
                                 value=2,
                                 step=1,
                                 label="Rerank top n",
-                                info="Number of rerank results",
-                                interactive=True,
+                                info="Number of rerank results(setted on creation step in GenAI pipeline).",
+                                interactive=(rerank_device == "NPU"),
                             )
                         with gr.Row():
                             vector_search_top_k = gr.Slider(
                                 1,
                                 50,
-                                value=10,
+                                value=4,
                                 step=1,
                                 label="Search top k",
                                 info="Search top k must >= Rerank top n",

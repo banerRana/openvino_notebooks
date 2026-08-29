@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import queue
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 from langchain_core.language_models.llms import LLM
@@ -22,6 +22,20 @@ from langchain_core.outputs import (
     LLMResult,
 )
 
+from pathlib import Path
+
+import numpy as np
+from langchain_core.callbacks import Callbacks
+from langchain_core.documents import Document
+from langchain_core.documents.compressor import BaseDocumentCompressor
+from langchain_core.embeddings import Embeddings
+from pydantic import BaseModel, ConfigDict, Field
+from genai_helper import ChunkStreamer
+
+DEFAULT_QUERY_INSTRUCTION = "Represent the question for retrieving supporting documents: "
+DEFAULT_QUERY_BGE_INSTRUCTION_EN = "Represent this question for searching relevant passages: "
+DEFAULT_QUERY_BGE_INSTRUCTION_ZH = "为这个句子生成表示以用于检索相关文章："
+
 DEFAULT_SYSTEM_PROMPT = """You are a helpful, respectful, and honest assistant."""
 
 
@@ -33,8 +47,8 @@ class OpenVINOLLM(LLM):
     Example using from_model_path:
         .. code-block:: python
 
-            from langchain_community.llms import OpenVINOLLM
-            ov = OpenVINOPipeline.from_model_path(
+            from ov_langchain_helper import OpenVINOLLM
+            ov = OpenVINOLLM.from_model_path(
                 model_path="./openvino_model_dir",
                 device="CPU",
             )
@@ -44,14 +58,14 @@ class OpenVINOLLM(LLM):
             import openvino_genai
             pipe = openvino_genai.LLMPipeline("./openvino_model_dir", "CPU")
             config = openvino_genai.GenerationConfig()
-            ov = OpenVINOPipeline.from_model_path(
-                pipe=pipe,
+            ov = OpenVINOLLM.from_model_path(
+                ov_pipe=pipe,
                 config=config,
             )
 
     """
 
-    pipe: Any = None
+    ov_pipe: Any = None
     tokenizer: Any = None
     config: Any = None
     streamer: Any = None
@@ -71,148 +85,15 @@ class OpenVINOLLM(LLM):
         except ImportError:
             raise ImportError("Could not import OpenVINO GenAI package. " "Please install it with `pip install openvino-genai`.")
 
-        class IterableStreamer(openvino_genai.StreamerBase):
-            """
-            A custom streamer class for handling token streaming
-            and detokenization with buffering.
+        ov_pipe = openvino_genai.LLMPipeline(model_path, device, **kwargs)
 
-            Attributes:
-                tokenizer (Tokenizer): The tokenizer used for encoding
-                and decoding tokens.
-                tokens_cache (list): A buffer to accumulate tokens
-                for detokenization.
-                text_queue (Queue): A synchronized queue
-                for storing decoded text chunks.
-                print_len (int): The length of the printed text
-                to manage incremental decoding.
-            """
-
-            def __init__(self, tokenizer: Any) -> None:
-                """
-                Initializes the IterableStreamer with the given tokenizer.
-
-                Args:
-                    tokenizer (Tokenizer): The tokenizer to use for encoding
-                    and decoding tokens.
-                """
-                super().__init__()
-                self.tokenizer = tokenizer
-                self.tokens_cache: list[int] = []
-                self.text_queue: Any = queue.Queue()
-                self.print_len = 0
-
-            def __iter__(self) -> IterableStreamer:
-                """
-                Returns the iterator object itself.
-                """
-                return self
-
-            def __next__(self) -> str:
-                """
-                Returns the next value from the text queue.
-
-                Returns:
-                    str: The next decoded text chunk.
-
-                Raises:
-                    StopIteration: If there are no more elements in the queue.
-                """
-                value = self.text_queue.get()  # get() will be blocked until a token is available.
-                if value is None:
-                    raise StopIteration
-                return value
-
-            def get_stop_flag(self) -> bool:
-                """
-                Checks whether the generation process should be stopped.
-
-                Returns:
-                    bool: Always returns False in this implementation.
-                """
-                return False
-
-            def put_word(self, word: Any) -> None:
-                """
-                Puts a word into the text queue.
-
-                Args:
-                    word (str): The word to put into the queue.
-                """
-                self.text_queue.put(word)
-
-            def put(self, token_id: int) -> bool:
-                """
-                Processes a token and manages the decoding buffer.
-                Adds decoded text to the queue.
-
-                Args:
-                    token_id (int): The token_id to process.
-
-                Returns:
-                    bool: True if generation should be stopped, False otherwise.
-                """
-                self.tokens_cache.append(token_id)
-                text = self.tokenizer.decode(self.tokens_cache, skip_special_tokens=True)
-
-                word = ""
-                if len(text) > self.print_len and "\n" == text[-1]:
-                    word = text[self.print_len :]
-                    self.tokens_cache = []
-                    self.print_len = 0
-                elif len(text) >= 3 and text[-3:] == chr(65533):
-                    pass
-                elif len(text) > self.print_len:
-                    word = text[self.print_len :]
-                    self.print_len = len(text)
-                self.put_word(word)
-
-                if self.get_stop_flag():
-                    self.end()
-                    return True
-                else:
-                    return False
-
-            def end(self) -> None:
-                """
-                Flushes residual tokens from the buffer
-                and puts a None value in the queue to signal the end.
-                """
-                text = self.tokenizer.decode(self.tokens_cache, skip_special_tokens=True)
-                if len(text) > self.print_len:
-                    word = text[self.print_len :]
-                    self.put_word(word)
-                    self.tokens_cache = []
-                    self.print_len = 0
-                self.put_word(None)
-
-            def reset(self) -> None:
-                """
-                Resets the state.
-                """
-                self.tokens_cache = []
-                self.text_queue = queue.Queue()
-                self.print_len = 0
-
-        class ChunkStreamer(IterableStreamer):
-            def __init__(self, tokenizer: Any, tokens_len: int = 4) -> None:
-                super().__init__(tokenizer)
-                self.tokens_len = tokens_len
-
-            def put(self, token_id: int) -> bool:
-                if (len(self.tokens_cache) + 1) % self.tokens_len != 0:
-                    self.tokens_cache.append(token_id)
-                    return False
-                return super().put(token_id)
-
-        pipe = openvino_genai.LLMPipeline(model_path, device, **kwargs)
-
-        config = pipe.get_generation_config()
+        config = ov_pipe.get_generation_config()
         if tokenizer is None:
-            tokenizer = pipe.get_tokenizer()
+            tokenizer = ov_pipe.get_tokenizer()
         streamer = ChunkStreamer(tokenizer)
 
         return cls(
-            pipe=pipe,
+            ov_pipe=ov_pipe,
             tokenizer=tokenizer,
             config=config,
             streamer=streamer,
@@ -239,7 +120,7 @@ class OpenVINOLLM(LLM):
             input_ids = tokens["input_ids"]
             attention_mask = tokens["attention_mask"]
             prompt = openvino_genai.TokenizedInputs(ov.Tensor(input_ids), ov.Tensor(attention_mask))
-        output = self.pipe.generate(prompt, self.config, **kwargs)
+        output = self.ov_pipe.generate(prompt, self.config, **kwargs)
         if not isinstance(self.tokenizer, openvino_genai.Tokenizer):
             output = self.tokenizer.batch_decode(output.tokens, skip_special_tokens=True)[0]
         return output
@@ -274,7 +155,7 @@ class OpenVINOLLM(LLM):
             genration function for single thread
             """
             self.streamer.reset()
-            self.pipe.generate(prompt, self.config, self.streamer, **kwargs)
+            self.ov_pipe.generate(prompt, self.config, self.streamer, **kwargs)
             stream_complete.set()
             self.streamer.end()
 
@@ -434,3 +315,489 @@ class ChatOpenVINO(BaseChatModel):
     @property
     def _llm_type(self) -> str:
         return "openvino-chat-wrapper"
+
+
+class OpenVINOEmbeddings(BaseModel, Embeddings):
+    """OpenVINO embedding models.
+
+    Example:
+        .. code-block:: python
+
+            from ov_langchain_helper import OpenVINOEmbeddings
+
+            model_name = "sentence-transformers/all-mpnet-base-v2"
+            model_kwargs = {'device': 'CPU'}
+            encode_kwargs = {'normalize_embeddings': True}
+            ov = OpenVINOEmbeddings(
+                model_path=model_name,
+                model_kwargs=model_kwargs,
+                encode_kwargs=encode_kwargs
+            )
+    """
+
+    ov_model: Any = None
+    """OpenVINO model object."""
+    tokenizer: Any = None
+    """Tokenizer for embedding model."""
+    model_path: str
+    """Local model path."""
+    model_kwargs: Dict[str, Any] = Field(default_factory=dict)
+    """Keyword arguments to pass to the model."""
+    encode_kwargs: Dict[str, Any] = Field(default_factory=dict)
+    """Keyword arguments to pass when calling the `encode` method of the model."""
+    show_progress: bool = False
+    """Whether to show a progress bar."""
+
+    def __init__(self, **kwargs: Any):
+        """Initialize the sentence_transformer."""
+        super().__init__(**kwargs)
+
+        try:
+            import openvino as ov
+        except ImportError as e:
+            raise ImportError("Could not import openvino python package. " "Please install it with: " "pip install -U 'openvino") from e
+
+        try:
+            import openvino_genai
+        except ImportError as e:
+            raise ImportError("Could not import openvino_genai python package. " "Please install it with: " "pip install -U openvino_genai") from e
+
+        if self.ov_model is None:
+            core = ov.Core()
+            self.ov_model = core.compile_model(Path(self.model_path) / "openvino_model.xml", **self.model_kwargs)
+        self.tokenizer = openvino_genai.Tokenizer(self.model_path)
+
+    def _text_length(self, text: Any) -> int:
+        """
+        Help function to get the length for the input text. Text can be either
+        a list of ints (which means a single text as input), or a tuple of list of ints
+        (representing several text inputs to the model).
+        """
+
+        if isinstance(text, dict):  # {key: value} case
+            return len(next(iter(text.values())))
+        elif not hasattr(text, "__len__"):  # Object has no len() method
+            return 1
+        # Empty string or list of ints
+        elif len(text) == 0 or isinstance(text[0], int):
+            return len(text)
+        else:
+            # Sum of length of individual strings
+            return sum([len(t) for t in text])
+
+    def encode(
+        self,
+        sentences: Any,
+        batch_size: int = 4,
+        show_progress_bar: bool = False,
+        mean_pooling: bool = False,
+        normalize_embeddings: bool = True,
+    ) -> Any:
+        """
+        Computes sentence embeddings.
+
+        :param sentences: the sentences to embed.
+        :param batch_size: the batch size used for the computation.
+        :param show_progress_bar: Whether to output a progress bar.
+        :param convert_to_numpy: Whether the output should be a list of numpy vectors.
+        :param convert_to_tensor: Whether the output should be one large tensor.
+        :param mean_pooling: Whether to pool returned vectors.
+        :param normalize_embeddings: Whether to normalize returned vectors.
+
+        :return: By default, a 2d numpy array with shape [num_inputs, output_dimension].
+        """
+        try:
+            import numpy as np
+        except ImportError as e:
+            raise ImportError("Unable to import numpy, please install with `pip install -U numpy`.") from e
+        try:
+            from tqdm import trange
+        except ImportError as e:
+            raise ImportError("Unable to import tqdm, please install with `pip install -U tqdm`.") from e
+
+        def run_mean_pooling(model_output: Any, attention_mask: Any) -> Any:
+            token_embeddings = model_output[0]  # First element of model_output contains all token embeddings
+            input_mask_expanded = np.broadcast_to(np.expand_dims(attention_mask, axis=-1), token_embeddings.size())
+            return np.sum(token_embeddings * input_mask_expanded, 1) / np.clip(input_mask_expanded.sum(1), a_min=1e-9)
+
+        input_was_string = False
+        if isinstance(sentences, str) or not hasattr(sentences, "__len__"):  # Cast an individual sentence to a list with length 1
+            sentences = [sentences]
+            input_was_string = True
+
+        all_embeddings: Any = []
+        length_sorted_idx = np.argsort([-self._text_length(sen) for sen in sentences])
+        sentences_sorted = [sentences[idx] for idx in length_sorted_idx]
+
+        for start_index in trange(0, len(sentences), batch_size, desc="Batches", disable=not show_progress_bar):
+            sentences_batch = sentences_sorted[start_index : start_index + batch_size]
+
+            length = self.ov_model.inputs[0].get_partial_shape()[1]
+            if length.is_dynamic:
+                features = self.tokenizer.encode(sentences_batch)
+            else:
+                features = self.tokenizer.encode(
+                    sentences_batch,
+                    pad_to_max_length=True,
+                    max_length=length.get_length(),
+                )
+            if "token_type_ids" in (input.any_name for input in self.ov_model.inputs):
+                token_type_ids = np.zeros(features.attention_mask.shape)
+                model_input = {
+                    "input_ids": features.input_ids,
+                    "attention_mask": features.attention_mask,
+                    "token_type_ids": token_type_ids,
+                }
+            else:
+                model_input = {
+                    "input_ids": features.input_ids,
+                    "attention_mask": features.attention_mask,
+                }
+            out_features = self.ov_model(model_input)
+            if mean_pooling:
+                embeddings = run_mean_pooling(out_features, features["attention_mask"])
+            else:
+                embeddings = out_features[0][:, 0]
+            if normalize_embeddings:
+                norm = np.linalg.norm(embeddings, ord=2, axis=1, keepdims=True)
+                embeddings = embeddings / norm
+            all_embeddings.extend(embeddings)
+
+        all_embeddings = [all_embeddings[idx] for idx in np.argsort(length_sorted_idx)]
+
+        if input_was_string:
+            all_embeddings = all_embeddings[0]
+
+        return all_embeddings
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """Compute doc embeddings using a HuggingFace transformer model.
+
+        Args:
+            texts: The list of texts to embed.
+
+        Returns:
+            List of embeddings, one for each text.
+        """
+
+        texts = list(map(lambda x: x.replace("\n", " "), texts))
+        embeddings = self.encode(texts, show_progress_bar=self.show_progress, **self.encode_kwargs)
+
+        return embeddings
+
+    def embed_query(self, text: str) -> List[float]:
+        """Compute query embeddings using a HuggingFace transformer model.
+
+        Args:
+            text: The text to embed.
+
+        Returns:
+            Embeddings for the text.
+        """
+        return self.embed_documents([text])[0]
+
+
+class OpenVINOBgeEmbeddings(OpenVINOEmbeddings):
+    """OpenVNO BGE embedding models.
+
+    Bge Example:
+        .. code-block:: python
+
+            from ov_langchain_helper import OpenVINOBgeEmbeddings
+
+            model_name = "BAAI/bge-large-en-v1.5"
+            model_kwargs = {'device': 'CPU'}
+            encode_kwargs = {'normalize_embeddings': True}
+            ov = OpenVINOBgeEmbeddings(
+                model_path=model_name,
+                model_kwargs=model_kwargs,
+                encode_kwargs=encode_kwargs
+            )
+    """
+
+    query_instruction: str = DEFAULT_QUERY_BGE_INSTRUCTION_EN
+    """Instruction to use for embedding query."""
+    embed_instruction: str = ""
+    """Instruction to use for embedding document."""
+
+    def __init__(self, **kwargs: Any):
+        """Initialize the sentence_transformer."""
+        super().__init__(**kwargs)
+
+        if "-zh" in self.model_path:
+            self.query_instruction = DEFAULT_QUERY_BGE_INSTRUCTION_ZH
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """Compute doc embeddings using a HuggingFace transformer model.
+
+        Args:
+            texts: The list of texts to embed.
+
+        Returns:
+            List of embeddings, one for each text.
+        """
+        texts = [self.embed_instruction + t.replace("\n", " ") for t in texts]
+        embeddings = self.encode(texts, **self.encode_kwargs)
+        return embeddings
+
+    def embed_query(self, text: str) -> List[float]:
+        """Compute query embeddings using a HuggingFace transformer model.
+
+        Args:
+            text: The text to embed.
+
+        Returns:
+            Embeddings for the text.
+        """
+        text = text.replace("\n", " ")
+        embedding = self.encode(self.query_instruction + text, **self.encode_kwargs)
+        return embedding
+
+
+class OpenVINOGenAIEmbeddings(BaseModel, Embeddings):
+    """OpenVINO embedding models.
+
+    To use, you should have the ``openvino-genai`` python package installed.
+
+    Example:
+        .. code-block:: python
+
+            from ov_langchain_helper import OpenVINOGenAIEmbeddings
+
+            model_path = "./sentence-transformers/all-mpnet-base-v2"
+            encode_kwargs = {'normalize_embeddings': True}
+            ov = OpenVINOGenAIEmbeddings.from_model_path(
+                model_path=model_path,
+                device="CPU",
+                encode_kwargs=encode_kwargs,
+            )
+    """
+
+    ov_pipe: Any = None
+    """OpenVINO pipeline object."""
+
+    @classmethod
+    def from_model_path(
+        cls,
+        model_path: str,
+        device: str = "CPU",
+        encode_kwargs: Dict[str, Any] = {},
+    ) -> OpenVINOGenAIEmbeddings:
+        """Construct the openvino text embedding pipeline from model_path"""
+        try:
+            import openvino_genai
+
+        except ImportError:
+            raise ImportError("Could not import OpenVINO GenAI package. " "Please install it with `pip install openvino-genai`.")
+
+        config = openvino_genai.TextEmbeddingPipeline.Config()
+        if "mean_pooling" in encode_kwargs and encode_kwargs["mean_pooling"]:
+            config.pooling_type = openvino_genai.TextEmbeddingPipeline.PoolingType.MEAN
+        if "normalize_embeddings" in encode_kwargs:
+            config.normalize = encode_kwargs["normalize_embeddings"]
+        if "max_length" in encode_kwargs:
+            config.max_length = encode_kwargs["max_length"]
+
+        config.query_instruction = DEFAULT_QUERY_BGE_INSTRUCTION_EN
+        if "-zh" in model_path:
+            config.query_instruction = DEFAULT_QUERY_BGE_INSTRUCTION_ZH
+
+        if "query_instruction" in encode_kwargs:
+            config.query_instruction = encode_kwargs["query_instruction"]
+        if "embed_instruction" in encode_kwargs:
+            config.embed_instruction = encode_kwargs["embed_instruction"]
+
+        ov_pipe = openvino_genai.TextEmbeddingPipeline(model_path, device, config)
+
+        return cls(ov_pipe=ov_pipe)
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """Compute doc embeddings.
+
+        Args:
+            texts: The list of texts to embed.
+
+        Returns:
+            List of embeddings, one for each text.
+        """
+
+        texts = list(map(lambda x: x.replace("\n", " "), texts))
+        return self.ov_pipe.embed_documents(texts)
+
+    def embed_query(self, text: str) -> List[float]:
+        """Compute query embeddings.
+
+        Args:
+            text: The text to embed.
+
+        Returns:
+            Embeddings for the text.
+        """
+
+        return self.ov_pipe.embed_query(text)
+
+
+class RerankRequest:
+    """Request for reranking."""
+
+    def __init__(self, query: Any = None, passages: Any = None):
+        self.query = query
+        self.passages = passages if passages is not None else []
+
+
+class OpenVINOReranker(BaseDocumentCompressor):
+    """
+    OpenVINO rerank models.
+    """
+
+    ov_model: Any = None
+    """OpenVINO model object."""
+    tokenizer: Any = None
+    """Tokenizer for embedding model."""
+    model_path: str
+    """Local model path."""
+    model_kwargs: Dict[str, Any] = Field(default_factory=dict)
+    """Keyword arguments passed to the model."""
+    top_n: int = 4
+    """return Top n texts."""
+
+    def __init__(self, **kwargs: Any):
+        super().__init__(**kwargs)
+
+        try:
+            import openvino as ov
+        except ImportError as e:
+            raise ImportError("Could not import openvino python package. " "Please install it with: " "pip install -U 'openvino") from e
+
+        try:
+            import openvino_genai
+        except ImportError as e:
+            raise ImportError("Could not import openvino_genai python package. " "Please install it with: " "pip install -U openvino_genai") from e
+        if self.ov_model is None:
+            core = ov.Core()
+            self.ov_model = core.compile_model(Path(self.model_path) / "openvino_model.xml", **self.model_kwargs)
+        self.tokenizer = openvino_genai.Tokenizer(self.model_path)
+
+    def rerank(self, request: Any) -> Any:
+        query = request.query
+        passages = request.passages
+        # # openvino tokenizer can only support 1D list
+        query_passage_pairs = [query + "</s></s> " + passage["text"] for passage in passages]
+        # query_passage_pairs = [[query, passage["text"]] for passage in passages]
+        length = self.ov_model.inputs[0].get_partial_shape()[1]
+        if length.is_dynamic:
+            features = self.tokenizer.encode(query_passage_pairs)
+        else:
+            features = self.tokenizer.encode(
+                query_passage_pairs,
+                pad_to_max_length=True,
+                max_length=length.get_length(),
+            )
+        model_input = {
+            "input_ids": features.input_ids,
+            "attention_mask": features.attention_mask,
+        }
+        outputs = self.ov_model(model_input)
+        if outputs[0].shape[1] > 1:
+            scores = outputs[0][:, 1]
+        else:
+            scores = outputs[0].flatten()
+
+        scores = list(1 / (1 + np.exp(-scores)))
+
+        # Combine scores with passages, including metadata
+        for score, passage in zip(scores, passages):
+            passage["score"] = score
+
+        # Sort passages based on scores
+        passages.sort(key=lambda x: x["score"], reverse=True)
+
+        return passages
+
+    def compress_documents(
+        self,
+        documents: Sequence[Document],
+        query: str,
+        callbacks: Optional[Callbacks] = None,
+    ) -> Sequence[Document]:
+        passages = [{"id": i, "text": doc.page_content} for i, doc in enumerate(documents)]
+
+        rerank_request = RerankRequest(query=query, passages=passages)
+        rerank_response = self.rerank(rerank_request)[: self.top_n]
+        final_results = []
+        for r in rerank_response:
+            doc = Document(
+                page_content=r["text"],
+                metadata={"id": r["id"], "relevance_score": r["score"]},
+            )
+            final_results.append(doc)
+        return final_results
+
+
+class OpenVINOGenAIReranker(BaseDocumentCompressor):
+    """OpenVINO reranking models.
+
+    To use, you should have the ``openvino-genai`` python package installed.
+
+    Example:
+        .. code-block:: python
+
+            from ov_langchain_helper import OpenVINOGenAIReranker
+
+            model_path = "./sentence-transformers/all-mpnet-base-v2"
+            config_kwargs = {'top_n': 3}
+            ov = OpenVINOGenAIReranker.from_model_path(
+                model_path=model_path,
+                device='CPU',
+                config_kwargs=config_kwargs,
+            )
+    """
+
+    ov_pipe: Any = None
+    """OpenVINO pipeline object."""
+    top_n: int = 3
+    """return Top n texts. can not be updated after pipeline was created."""
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    @classmethod
+    def from_model_path(cls, model_path: str, device: str = "CPU", config_kwargs: Dict[str, Any] = {}) -> OpenVINOGenAIReranker:
+        """Construct the openvino text embedding pipeline from model_path"""
+        try:
+            import openvino_genai
+
+        except ImportError:
+            raise ImportError("Could not import OpenVINO GenAI package. " "Please install it with `pip install openvino-genai`.")
+
+        config = openvino_genai.TextRerankPipeline.Config()
+        if "top_n" in config_kwargs:
+            config.top_n = config_kwargs["top_n"]
+            top_n = config_kwargs["top_n"]
+        if "max_length" in config_kwargs:
+            config.max_length = config_kwargs["max_length"]
+
+        ov_pipe = openvino_genai.TextRerankPipeline(model_path, device, config)
+
+        return cls(ov_pipe=ov_pipe)
+
+    def compress_documents(
+        self,
+        documents: Sequence[Document],
+        query: str,
+        callbacks: Optional[Callbacks] = None,
+    ) -> Sequence[Document]:
+        docs = [doc.page_content for doc in documents]
+        rerank_response = self.ov_pipe.rerank(query, docs)
+        final_results = []
+        for index, score in rerank_response:
+            doc = Document(
+                page_content=documents[index].page_content,
+                metadata={"id": index, "relevance_score": score},
+            )
+            final_results.append(doc)
+
+        return final_results

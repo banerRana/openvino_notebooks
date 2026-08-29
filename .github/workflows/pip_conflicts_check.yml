@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   build_pip_conflicts_check:
-    runs-on: ubuntu-20.04 # change cachepip step when changing this
+    runs-on: ubuntu-22.04 # change cachepip step when changing this
     steps:
       - name: Checkout repository
         uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
@@ -34,7 +34,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1.0
         with:
-          python-version: 3.9 # change cachepip step when changing this
+          python-version: '3.10' # change cachepip step when changing this
 
       - name: Install dependencies
         run: |

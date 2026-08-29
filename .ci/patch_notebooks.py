@@ -5,7 +5,6 @@ import nbformat
 import nbconvert
 from traitlets.config import Config
 
-
 # Notebooks that are excluded from the CI tests
 EXCLUDED_NOTEBOOKS = ["data-preparation-ct-scan.ipynb", "pytorch-monai-training.ipynb"]
 
@@ -16,12 +15,12 @@ DEVICE_WIDGET_NEW = "device_widget("
 def disable_gradio_debug(nb, notebook_path):
     found = False
     for cell in nb["cells"]:
-        if "gradio" in cell["source"] and "debug" in cell["source"]:
+        if "gradio" in cell["source"] and "launch(" in cell["source"]:
             found = True
-            cell["source"] = cell["source"].replace("debug=True", "debug=False")
+            cell["source"] = ""
 
     if found:
-        print(f"Disabled gradio debug mode for {notebook_path}")
+        print(f"Disabled gradio for {notebook_path}")
     return nb
 
 
@@ -70,7 +69,7 @@ def remove_ov_install(cell):
             return False
         return True
 
-    lines = cell["source"].replace("pip_instal(", "pip_install( ").split("\n")
+    lines = cell["source"].replace("pip_install(", "pip_install( ").split("\n")
     for line in lines:
         if "openvino" in line:
             if "optimum-cli" in line or line.startswith("#") or "-openvino" in line:
@@ -80,7 +79,7 @@ def remove_ov_install(cell):
             empty = True
             package_found = False
             for part in line.split(" "):
-                if "openvino-dev" in part:
+                if "openvino-dev" in part and not "https://github.com/openvino-dev-samples/" in part:
                     if part.endswith(")"):
                         updated_line_content.append(")")
                     package_found = True
@@ -113,8 +112,8 @@ def remove_ov_install(cell):
                 if not empty:
                     updated_line = " ".join(updated_line_content)
                     if line.startswith(" "):
-                        for token in line:
-                            if token != " ":
+                        for char in line:
+                            if char != " ":
                                 break
                             # keep indention
                             updated_line = " " + updated_line

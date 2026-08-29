@@ -1,0 +1,17 @@
+openvino-genai==2025.2.0
+optimum-intel
+protobuf>=6.33.5
+torch
+huggingface-hub
+
+# openai api server requirements
+fastapi
+uvicorn
+openai
+
+# smolagents demo requirements
+smolagents[openai,mcp,gradio]>=1.25.0
+ddgs
+markdownify
+requests
+python-pptx

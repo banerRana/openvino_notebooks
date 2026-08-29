@@ -1,9 +1,13 @@
 from pathlib import Path
 import types
-from typing import Optional, Tuple, Union, List, Dict, Any
+from typing import Optional, Union, Any
 import gc
 import openvino as ov
-from openvino.runtime import opset13
+
+try:
+    from openvino import opset13
+except ImportError:
+    from openvino.runtime import opset13
 import nncf
 import numpy as np
 import torch
@@ -34,8 +38,8 @@ def model_has_input_output_name(ov_model: ov.Model, name: str):
 
 def fuse_cache_reorder(
     ov_model: ov.Model,
-    not_kv_inputs: List[str],
-    key_value_input_names: List[str],
+    not_kv_inputs: list[str],
+    key_value_input_names: list[str],
     gather_dim: int,
 ):
     """
@@ -51,9 +55,9 @@ def fuse_cache_reorder(
     Parameters:
       ov_model (`ov.Model`):
           openvino model for processing
-      not_kv_inputs (`List[str]`):
+      not_kv_inputs (`list[str]`):
           list of input nodes in model that not related to past key values
-      key_value_input_names (`List[str]`):
+      key_value_input_names (`list[str]`):
           list of names for key value input layers
       gather_dim (int):
           dimension for gathering cache during reorder pass
@@ -92,11 +96,21 @@ def build_state_initializer(ov_model: ov.Model, batch_dim: int):
         opset13.constant([0]),
         opset13.constant(0),
     )
+    var_id_to_shape = {}
+    for op in ov_model.get_ops():
+        if op.get_type_name() == "Assign":
+            var_id_to_shape[op.get_variable_id()] = op.input_value(0).get_partial_shape()
     for op in ov_model.get_ops():
         if op.get_type_name() == "ReadValue":
-            dims = [dim.min_length for dim in list(op.get_output_partial_shape(0))]
-            dims[batch_dim] = batch
-            dims = [(opset13.constant(np.array([dim], dtype=np.int64)) if isinstance(dim, int) else dim) for dim in dims]
+            ref_shape = var_id_to_shape.get(op.get_variable_id(), op.get_output_partial_shape(0))
+            dims = []
+            for i, dim in enumerate(ref_shape):
+                if i == batch_dim:
+                    dims.append(batch)
+                elif dim.is_static:
+                    dims.append(opset13.constant(np.array([dim.get_length()], dtype=np.int64)))
+                else:
+                    dims.append(opset13.constant(np.array([0], dtype=np.int64)))
             shape = opset13.concat(dims, axis=0)
             broadcast = opset13.broadcast(opset13.constant(0.0, dtype=op.get_output_element_type(0)), shape)
             op.set_arguments([broadcast])
@@ -105,9 +119,9 @@ def build_state_initializer(ov_model: ov.Model, batch_dim: int):
 
 def make_stateful(
     ov_model: ov.Model,
-    not_kv_inputs: List[str],
-    key_value_input_names: List[str],
-    key_value_output_names: List[str],
+    not_kv_inputs: list[str],
+    key_value_input_names: list[str],
+    key_value_output_names: list[str],
     batch_dim: int,
     num_attention_heads: int,
     num_beams_and_batch: int = None,
@@ -118,11 +132,11 @@ def make_stateful(
     Parameters:
         ov_model (ov.Model):
             openvino model
-        not_kv_inputs (`List[str]`):
+        not_kv_inputs (`list[str]`):
             list of input nodes in model that not related to past key values
-        key_value_input_names (`List[str]`):
+        key_value_input_names (`list[str]`):
             list of names for key value input layers
-        key_value_output_names (`List[str]`):
+        key_value_output_names (`list[str]`):
             list of names for key value input layers
         batch_dim (int):
             index of batch dimension in key value layers
@@ -383,7 +397,7 @@ class OvModelForCausalLMWithEmb(GenerationMixin):
         self,
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        past_key_values: Optional[tuple[tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         **kwargs,
@@ -439,7 +453,7 @@ class OvModelForCausalLMWithEmb(GenerationMixin):
         self,
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        past_key_values: Optional[tuple[tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.LongTensor] = None,
         **kwargs,
@@ -509,7 +523,7 @@ class OvModelForCausalLMWithEmb(GenerationMixin):
         return self._past_length
 
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
-    def _reorder_cache(self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor) -> Tuple[Tuple[torch.Tensor]]:
+    def _reorder_cache(self, past_key_values: tuple[tuple[torch.Tensor]], beam_idx: torch.Tensor) -> tuple[tuple[torch.Tensor]]:
         """
         This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
         [`~PreTrainedModel.beam_sample`] is called.
@@ -541,7 +555,8 @@ class OVQwen2AudioForConditionalGeneration(GenerationMixin):
         self._padding_side = "left"  # set it to left by default, user can use setter to change padding_sides
         self.config.is_decoder = True
         self.config.is_encoder_decoder = False
-        self._supports_cache_class = False
+        self._supports_cache_class = True
+        self._supports_static_cache = True
         self.main_input_name = "input_ids"
         self.device = torch.device("cpu")
 
@@ -675,11 +690,12 @@ class OVQwen2AudioForConditionalGeneration(GenerationMixin):
         attention_mask: Optional[torch.Tensor] = None,
         feature_attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        past_key_values: Optional[list[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: bool = True,
         return_dict: bool = True,
-    ) -> Union[Tuple, Qwen2AudioCausalLMOutputWithPast]:
+        cache_position: Optional[torch.LongTensor] = None,
+    ) -> Union[tuple, Qwen2AudioCausalLMOutputWithPast]:
         if input_features is not None:
             input_features = input_features
             feature_attention_mask = feature_attention_mask
@@ -730,6 +746,12 @@ class OVQwen2AudioForConditionalGeneration(GenerationMixin):
                     audio_features = torch.from_numpy(audio_features).to(inputs_embeds.device, inputs_embeds.dtype)
                     inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_features)
 
+        if position_ids is None and attention_mask is not None:
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past_key_values is not None:
+                position_ids = position_ids[:, -inputs_embeds.shape[1] :]
+
         outputs = self.language_model(
             None, attention_mask=attention_mask, position_ids=position_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, use_cache=True
         )
@@ -746,107 +768,47 @@ class OVQwen2AudioForConditionalGeneration(GenerationMixin):
         self,
         input_ids,
         past_key_values=None,
-        inputs_embeds=None,
-        input_features=None,
         attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        use_cache=True,
+        input_features=None,
+        feature_attention_mask=None,
         **kwargs,
     ):
-        if past_key_values is not None:
-            cache_length = past_length = self.language_model._get_past_length(past_key_values)
-
-            # Ignore copy
-            # Here, we get the attention_mask, which was previously stored in the state after _merge_input_ids_with_audio_features.
-            if input_features is not None and kwargs.get("attention_mask") is not None:
-                attention_mask = kwargs["attention_mask"]
-                attention_mask = torch.cat([attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1)
-
-            # Keep only the unprocessed tokens:
-            # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
-            # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
-            # input)
-            if attention_mask is not None and attention_mask.shape[1] > input_ids.shape[1]:
-                input_ids = input_ids[:, -(attention_mask.shape[1] - past_length) :]
-            # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
-            # input_ids based on the past_length.
-            elif past_length < input_ids.shape[1]:
-                input_ids = input_ids[:, past_length:]
-            # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens.
-            elif self.config.audio_token_index in input_ids:
-                input_ids = input_ids[:, input_ids.shape[1] - 1 :]
-            # If the cache has seen more tokens than it can hold, then the cache has a size limit. Let's discard the
-            # older attention values, as their corresponding values are not part of the input.
-            if cache_length < past_length and attention_mask is not None:
-                attention_mask = attention_mask[:, -(cache_length + input_ids.shape[1]) :]
-
-        position_ids = kwargs.get("position_ids", None)
-        if attention_mask is not None and position_ids is None:
-            # create position_ids on the fly for batch generation
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-            if past_key_values:
-                position_ids = position_ids[:, -input_ids.shape[1] :]
-
-        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-        if inputs_embeds is not None and past_key_values is None:
-            model_inputs = {"inputs_embeds": inputs_embeds}
-        else:
-            model_inputs = {"input_ids": input_ids}
-
-        feature_attention_mask = kwargs.get("feature_attention_mask", None)
-        model_inputs.update(
-            {
-                "position_ids": position_ids,
-                "past_key_values": past_key_values,
-                "use_cache": kwargs.get("use_cache"),
-                "attention_mask": attention_mask,
-                "input_features": input_features,
-                "feature_attention_mask": feature_attention_mask,
-            }
+        if past_key_values != ((),):
+            past_key_values = None
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            cache_position=cache_position,
+            position_ids=position_ids,
+            use_cache=use_cache,
+            input_features=input_features,
+            feature_attention_mask=feature_attention_mask,
+            **kwargs,
         )
+        model_inputs["position_ids"] = None
+
+        if cache_position is not None and cache_position[0] != 0:
+            model_inputs["input_features"] = None
+
         return model_inputs
 
     def _update_model_kwargs_for_generation(
         self,
         outputs: ModelOutput,
-        model_kwargs: Dict[str, Any],
+        model_kwargs: dict[str, Any],
         is_encoder_decoder: bool = False,
         num_new_tokens: int = 1,
-    ) -> Dict[str, Any]:
-        # update past_key_values keeping its naming used in model code
-        cache_name, cache = self._extract_past_from_model_output(outputs)
-        model_kwargs[cache_name] = cache
-        if getattr(outputs, "state", None) is not None:
-            model_kwargs["state"] = outputs.state
-
-        # update attention_mask
+    ) -> dict[str, Any]:
         if getattr(outputs, "attention_mask", None) is not None:
             model_kwargs["attention_mask"] = outputs.attention_mask
 
-        # update token_type_ids with last value
-        if "token_type_ids" in model_kwargs:
-            token_type_ids = model_kwargs["token_type_ids"]
-            model_kwargs["token_type_ids"] = torch.cat([token_type_ids, token_type_ids[:, -1].unsqueeze(-1)], dim=-1)
-
-        if not is_encoder_decoder:
-            # update attention mask
-            if "attention_mask" in model_kwargs:
-                attention_mask = model_kwargs["attention_mask"]
-                model_kwargs["attention_mask"] = torch.cat([attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1)
-        else:
-            # update decoder attention mask
-            if "decoder_attention_mask" in model_kwargs:
-                decoder_attention_mask = model_kwargs["decoder_attention_mask"]
-                model_kwargs["decoder_attention_mask"] = torch.cat(
-                    [decoder_attention_mask, decoder_attention_mask.new_ones((decoder_attention_mask.shape[0], 1))],
-                    dim=-1,
-                )
-
-        if model_kwargs.get("use_cache", True):
-            model_kwargs["cache_position"] = model_kwargs["cache_position"][-1:] + num_new_tokens
-        else:
-            past_positions = model_kwargs.pop("cache_position")
-            new_positions = torch.arange(past_positions[-1] + 1, past_positions[-1] + num_new_tokens + 1, dtype=past_positions.dtype).to(past_positions.device)
-            model_kwargs["cache_position"] = torch.cat((past_positions, new_positions))
+        model_kwargs = super()._update_model_kwargs_for_generation(outputs, model_kwargs, is_encoder_decoder, num_new_tokens)
         return model_kwargs
 
     def _reorder_cache(self, *args, **kwargs):

@@ -1,30 +1,43 @@
-from typing import Callable
 import gradio as gr
+import imageio
+import openvino_genai as ov_genai
+import uuid
 
 
-def make_demo(fn: Callable):
+def make_demo(pipe):
+    def generate(prompt, negative_prompt, width, height, num_frames, num_inference_steps, seed):
+        frame_rate = 25
+        output = pipe.generate(
+            prompt,
+            negative_prompt=negative_prompt,
+            width=int(width),
+            height=int(height),
+            num_frames=int(num_frames),
+            num_inference_steps=int(num_inference_steps),
+            generator=ov_genai.TorchGenerator(int(seed)),
+            guidance_scale=3,
+            frame_rate=frame_rate,
+        )
+        file_name = f"output_{uuid.uuid4().hex[:8]}.mp4"
+        video_data = output.video.data
+        with imageio.get_writer(file_name, fps=frame_rate) as writer:
+            for i in range(video_data.shape[1]):
+                writer.append_data(video_data[0, i])
+        return file_name
+
     demo = gr.Interface(
-        fn=fn,
+        fn=generate,
         inputs=[
             gr.Textbox(label="Prompt"),
             gr.Textbox(label="Negative prompt"),
-            gr.Slider(32, 1280, value=702, label="Width", step=32),
-            gr.Slider(32, 720, value=480, label="Height", step=32),
-            gr.Slider(9, 257, value=25, label="Number of frames", step=8),
-            gr.Slider(10, 50, value=30, label="Number of inference steps", step=1),
-            gr.Slider(0, 1000000, value=42, label="Seed", step=1),
+            gr.Slider(minimum=32, maximum=1280, value=704, label="Width", step=32),
+            gr.Slider(minimum=32, maximum=720, value=480, label="Height", step=32),
+            gr.Slider(minimum=9, maximum=257, value=25, label="Number of frames", step=8),
+            gr.Slider(minimum=10, maximum=250, value=30, label="Number of inference steps", step=1),
+            gr.Slider(minimum=0, maximum=21000000, value=42, label="Seed", step=1),
         ],
         outputs=gr.Video(label="Result"),
         examples=[
-            [
-                "A woman with light skin, wearing a blue jacket and a black hat with a veil, looks down and to her right, then back up as she speaks; she has brown hair styled in an updo, light brown eyebrows, and is wearing a white collared shirt under her jacket; the camera remains stationary on her face as she speaks; the background is out of focus, but shows trees and people in period clothing; the scene is captured in real-life footage.",
-                "worst quality, inconsistent motion, blurry, jittery, distorted",
-                704,
-                480,
-                25,
-                30,
-                42,
-            ],
             [
                 """The camera pans over a snow-covered mountain range, revealing a vast expanse of snow-capped peaks and valleys.The mountains are covered in a thick layer of snow, with some areas appearing almost white while others have a slightly darker, almost grayish hue. The peaks are jagged and irregular, with some rising sharply into the sky while others are more rounded. The valleys are deep and narrow, with steep slopes that are also covered in snow. The trees in the foreground are mostly bare, with only a few leaves remaining on their branches. The sky is overcast, with thick clouds obscuring the sun. The overall impression is one of peace and tranquility, with the snow-covered mountains standing as a testament to the power and beauty of nature.""",
                 "worst quality, inconsistent motion, blurry, jittery, distorted",
@@ -71,6 +84,6 @@ def make_demo(fn: Callable):
                 42,
             ],
         ],
-        allow_flagging="never",
+        flagging_mode="never",
     )
     return demo

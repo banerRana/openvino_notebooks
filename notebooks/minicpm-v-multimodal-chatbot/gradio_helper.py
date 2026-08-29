@@ -21,10 +21,10 @@ example_image_urls = [
 ]
 for url, file_name in example_image_urls:
     if not Path(file_name).exists():
-        Image.open(requests.get(url, stream=True).raw).save(file_name)
+        Image.open(requests.get(url, stream=True, timeout=30).raw).save(file_name)
 
 
-def make_demo(model):
+def make_demo(model, mode_name):
     import openvino_genai as ov_genai
     import openvino as ov
 
@@ -40,7 +40,7 @@ def make_demo(model):
 
         """
         pic = Image.open(path).convert("RGB")
-        image_data = np.array(pic.getdata()).reshape(1, pic.size[1], pic.size[0], 3).astype(np.byte)
+        image_data = np.array(pic.getdata()).reshape(1, pic.size[1], pic.size[0], 3).astype(np.uint8)
         return ov.Tensor(image_data)
 
     class TextQueue:
@@ -119,7 +119,7 @@ def make_demo(model):
         additional_buttons = {"undo_button": None, "retry_button": None}
     demo = gr.ChatInterface(
         fn=bot_streaming,
-        title="MiniCPMV2 OpenVINO Chatbot",
+        title=f"{mode_name} OpenVINO Chatbot",
         examples=[
             {"text": "What is on the flower?", "files": ["./bee.jpg"]},
             {"text": "How to make this pastry?", "files": ["./baklava.png"]},

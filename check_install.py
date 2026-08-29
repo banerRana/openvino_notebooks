@@ -34,7 +34,7 @@ def show_supported(supported):
 
 
 def pip_check():
-    result = subprocess.run(["pip", "check"], universal_newlines=True, stdout=subprocess.PIPE)
+    result = subprocess.run(["pip", "check"], universal_newlines=True, stdout=subprocess.PIPE)  # nosec B603 B607 - hardcoded pip check command
     if "No broken requirements found" in result.stdout:
         return True, ""
     else:
@@ -60,7 +60,7 @@ NO_BROKEN_REQUIREMENTS, PIP_CHECK_OUTPUT = pip_check()
 CORRECT_KERNEL_PYTHON = PYTHON_EXECUTABLE == KERNEL_PYTHON
 
 IN_OPENVINO_ENV = "openvino_env" in sys.executable
-SUPPORTED_PYTHON_VERSION = PYTHON_VERSION.major == 3 and (PYTHON_VERSION.minor >= 8 and PYTHON_VERSION.minor <= 11)
+SUPPORTED_PYTHON_VERSION = PYTHON_VERSION.major == 3 and (PYTHON_VERSION.minor >= 10 and PYTHON_VERSION.minor <= 13)
 GLOBAL_OPENVINO_INSTALLED = "openvino_202" in os.environ.get("LD_LIBRARY_PATH", "") + ":".join(sys.path)
 
 
@@ -73,9 +73,9 @@ except ImportError:
 
 try:
     import openvino
-    from openvino.runtime import Core
+    from openvino import Core
 
-    OPENVINO_IE_VERSION = openvino.runtime.get_version()
+    OPENVINO_IE_VERSION = openvino.get_version()
     OPENVINO_SOURCE_ROOT = str(Path(openvino.__file__).parent)
     OPENVINO_IMPORT = True
 except ImportError:

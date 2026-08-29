@@ -1,7 +1,7 @@
 from glob import glob
 from enum import Enum
 import math
-import subprocess
+import subprocess  # nosec - disable B404:import-subprocess check
 
 import cv2
 import numpy as np
@@ -11,7 +11,6 @@ import torch.nn.functional as F
 
 from Wav2Lip import audio
 import openvino as ov
-
 
 device = "cpu"
 
@@ -577,9 +576,9 @@ def ov_inference(
 
     if not audio_path.endswith(".wav"):
         print("Extracting raw audio...")
-        command = "ffmpeg -y -i {} -strict -2 {}".format(audio_path, "temp/temp.wav")
+        command = ["ffmpeg", "-y", "-i", audio_path, "-strict", "-2", "temp/temp.wav"]
 
-        subprocess.call(command, shell=True)
+        subprocess.call(command)
         audio_path = "temp/temp.wav"
 
     wav = audio.load_wav(audio_path, 16000)
@@ -631,7 +630,7 @@ def ov_inference(
 
     out.release()
 
-    command = "ffmpeg -y -i {} -i {} -strict -2 -q:v 1 {}".format(audio_path, "Wav2Lip/temp/result.avi", outfile)
-    subprocess.call(command, shell=True)
+    command = ["ffmpeg", "-y", "-i", audio_path, "-i", "Wav2Lip/temp/result.avi", "-strict", "-2", "-q:v", "1", outfile]
+    subprocess.call(command)
 
     return outfile

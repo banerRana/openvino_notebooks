@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import List, Optional, Union, Tuple
+from typing import Optional, Union
 import types
 
 import cv2
@@ -44,24 +44,24 @@ def load_ov_icon_detector(model_path, device):
 
 
 def download_omniparser_florence_model():
-    florence_caption_dir = Path("weights/icon_caption_florence")
+    florence_caption_dir = Path("weights/icon_caption")
 
     if not florence_caption_dir.exists():
-        download_original_model("microsoft/Florence-2-base-ft", florence_caption_dir)
+        download_original_model("microsoft/Florence-2-base", florence_caption_dir)
     pt_model = florence_caption_dir / "pytorch_model.bin"
 
     if pt_model.exists():
         pt_model.unlink()
         (pt_model.parent / "config.json").unlink()
-    hf_hub_download("microsoft/OmniParser", filename="icon_caption_florence/model.safetensors", local_dir="weights")
-    hf_hub_download("microsoft/OmniParser", filename="icon_caption_florence/config.json", local_dir="weights")
-    hf_hub_download("microsoft/OmniParser", filename="icon_caption_florence/generation_config.json", local_dir="weights")
+    hf_hub_download("microsoft/OmniParser-v2.0", filename="icon_caption/model.safetensors", local_dir="weights")
+    hf_hub_download("microsoft/OmniParser-v2.0", filename="icon_caption/config.json", local_dir="weights")
+    hf_hub_download("microsoft/OmniParser-v2.0", filename="icon_caption/generation_config.json", local_dir="weights")
 
     with (florence_caption_dir / "config.json").open("r") as f:
         config_data = json.load(f)
     class_mapping = config_data["auto_map"]
     for key, value in class_mapping.items():
-        class_mapping[key] = value.replace("microsoft/Florence-2-base-ft--", "")
+        class_mapping[key] = value.replace("microsoft/Florence-2-base--", "")
     config_data["auto_map"] = class_mapping
 
     with (florence_caption_dir / "config.json").open("w") as f:
@@ -74,8 +74,8 @@ def download_omniparser_icon_detector():
 
     icon_detector_dir = Path("weights/icon_detect")
 
-    download_file("https://huggingface.co/spaces/microsoft/OmniParser/resolve/main/weights/icon_detect/best.pt", directory="weights/icon_detect")
-    download_file("https://huggingface.co/spaces/microsoft/OmniParser/raw/main/weights/icon_detect/model.yaml", directory="weights/icon_detect")
+    download_file("https://huggingface.co/microsoft/OmniParser-v2.0/resolve/main/icon_detect/model.pt", directory="weights/icon_detect")
+    download_file("https://huggingface.co/microsoft/OmniParser-v2.0/resolve/main/icon_detect/model.yaml", directory="weights/icon_detect")
 
     return icon_detector_dir
 
@@ -119,9 +119,9 @@ class BoxAnnotator:
         self,
         scene: np.ndarray,
         detections: Detections,
-        labels: Optional[List[str]] = None,
+        labels: Optional[list[str]] = None,
         skip_label: bool = False,
-        image_size: Optional[Tuple[int, int]] = None,
+        image_size: Optional[tuple[int, int]] = None,
     ) -> np.ndarray:
         """
         Draws bounding boxes on the frame using the detections provided.
@@ -130,7 +130,7 @@ class BoxAnnotator:
             scene (np.ndarray): The image on which the bounding boxes will be drawn
             detections (Detections): The detections for which the
                 bounding boxes will be drawn
-            labels (Optional[List[str]]): An optional list of labels
+            labels (Optional[list[str]]): An optional list of labels
                 corresponding to each detection. If `labels` are not provided,
                 corresponding `class_id` will be used as label.
             skip_label (bool): Is set to `True`, skips bounding box label annotation.
@@ -347,7 +347,8 @@ def get_xywh_yolo(input):
 
 
 def check_ocr_box(reader, image_path, output_bb_format="xywh", goal_filtering=None, easyocr_args=None):
-    result = reader.readtext(image_path, **easyocr_args)
+    img = cv2.imread(str(image_path))
+    result = reader.readtext(img, **easyocr_args)
     # print('goal filtering pred:', result[-5:])
     coord = [item[0] for item in result]
     text = [item[1] for item in result]
@@ -376,7 +377,7 @@ def predict_yolo(model, image_path, box_threshold, imgsz):
 
 
 def remove_overlap(boxes, iou_threshold, ocr_bbox=None):
-    assert ocr_bbox is None or isinstance(ocr_bbox, List)
+    assert ocr_bbox is None or isinstance(ocr_bbox, list)
 
     def box_area(box):
         return (box[2] - box[0]) * (box[3] - box[1])
@@ -460,7 +461,7 @@ def get_parsed_content_icon(filtered_boxes, ocr_bbox, image_source, caption_mode
 
 
 def annotate(
-    image_source: np.ndarray, boxes: torch.Tensor, logits: torch.Tensor, phrases: List[str], text_scale: float, text_padding=5, text_thickness=2, thickness=3
+    image_source: np.ndarray, boxes: torch.Tensor, logits: torch.Tensor, phrases: list[str], text_scale: float, text_padding=5, text_thickness=2, thickness=3
 ) -> np.ndarray:
     """
     This function annotates an image with bounding boxes and labels.
@@ -469,7 +470,7 @@ def annotate(
     image_source (np.ndarray): The source image to be annotated.
     boxes (torch.Tensor): A tensor containing bounding box coordinates. in cxcywh format, pixel scale
     logits (torch.Tensor): A tensor containing confidence scores for each bounding box.
-    phrases (List[str]): A list of labels for each bounding box.
+    phrases (list[str]): A list of labels for each bounding box.
     text_scale (float): The scale of the text to be displayed. 0.8 for mobile/web, 0.3 for desktop # 0.4 for mind2web
 
     Returns:

@@ -52,7 +52,7 @@ To do this, there are a few requirements that all notebooks need to pass.
 
 1. The notebooks work on Windows, macOS and Linux (see [supported operating
    systems](https://github.com/openvinotoolkit/openvino_notebooks#%EF%B8%8F-system-requirements))
-   with Python 3.9, 3.10, 3.11 and 3.12.
+   with Python 3.10, 3.11, 3.12 and 3.13.
 2. As a rule, the notebooks do not require installation of additional software that is not installable by
    `pip`. We do not assume that users have installed XCode Developer Tools, Visual C++ redistributable,
    `cmake`, etc. Please discuss if your notebook does need C++ - there are exceptions to this rule.
@@ -96,8 +96,8 @@ To do this, there are a few requirements that all notebooks need to pass.
    - Add a `README.md` to the notebook subdirectory. Add a screenshot that gives an indication of what
      the notebook does if applicable.
    - Avoid adding any other files to the notebook's subdirectory. Instead, rely on models and data samples available online and fetch them within the notebook. Please refer to the [Notebook utils](#notebook-utils) section.
-3. In case you want to utilize one of the Open Model Zoo models, refer to the [Model Tools](https://github.com/openvinotoolkit/openvino_notebooks/tree/latest/notebooks/model-tools)
-   notebook.
+3. In case you want to utilize one of the Open Model Zoo models, refer to the [Model Tools](https://github.com/openvinotoolkit/open_model_zoo/tree/master/tools/model_tools)
+   documentation.
 4. The notebooks should provide an easy way to clean up the downloaded data, for example with a
    commented-out cell at the end of the notebook.
 
@@ -141,7 +141,7 @@ To do this, there are a few requirements that all notebooks need to pass.
 1.  In case if notebook has specific requirements on python version or OS, it should be noted on top of notebook (before any code blocks) using
    following colored block:
    ```
-   <div class="alert alert-block alert-danger"> <b>Important note:</b> This notebook requires python >= 3.9. Please make sure that your environment fulfill to this requirement  before running it </div>
+   <div class="alert alert-block alert-danger"> <b>Important note:</b> This notebook requires python >= 3.10. Please make sure that your environment fulfill to this requirement  before running it </div>
    ```
 
 ### Notebook naming
@@ -334,7 +334,7 @@ standard `diff` tool for `git`, with much more useful output than the regular `g
 
 #### JupyterLab Code Formatter
 
-[JupyterLab Code Formatter](https://ryantam626.github.io/jupyterlab_code_formatter/index.html) adds a
+[JupyterLab Code Formatter](https://jupyterlab-code-formatter.readthedocs.io/) adds a
 button to Jupyter Lab to automatically format the code in notebooks with `black` and `isort`. Please
 use either this extension or a different way to automatically format your notebook.
 
